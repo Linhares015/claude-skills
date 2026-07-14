@@ -5,9 +5,31 @@ description: Use when the codex-mode workflow is active — Claude is technical 
 
 # Codex-Mode
 
-**Princípio central:** nível de planejamento, comunicação e validação é proporcional à complexidade e ao risco da tarefa.
+**Princípio central:** nível de planejamento, comunicação, esforço do Codex e validação é proporcional à complexidade e ao risco da tarefa.
 
 Claude decide *o que* deve ser feito. Codex decide *como* executar dentro dos padrões existentes. Claude revisa proporcional ao risco.
+
+## Despacho
+
+Delegar via `Agent({subagent_type: "codex:codex-rescue", prompt: "<tarefa autocontida>"})`.
+
+- Tarefas independentes: `run_in_background: true`, disparar em paralelo.
+- Tarefas sequenciais: aguardar a entrega antes de despachar a próxima.
+- Continuação de trabalho anterior no mesmo repositório ("continua", "aplica a correção", "aprofunda"): pedir `--resume` em vez de reexplicar contexto — reabrir do zero custa mais tokens do que retomar a thread.
+- Trabalho novo, sem relação com o anterior: `--fresh`.
+- Progresso de job em background: checar com `/codex:status` (tabela compacta) antes de pedir o resultado completo.
+
+## Controle de custo (--effort / modelo)
+
+Amarrar o esforço do Codex ao nível da tarefa — não usar o padrão do runtime por padrão:
+
+| Nível de tarefa | `--effort` | Modelo |
+|---|---|---|
+| Simples | `minimal` ou `low` | `spark` se a tarefa for mecânica e de baixo risco |
+| Intermediária | `medium` | padrão |
+| Complexa | `high` ou `xhigh` | padrão (evitar `spark`) |
+
+Nunca subir o esforço "por segurança" numa tarefa simples — isso anula a economia de tokens que o codex-mode existe para gerar.
 
 ## Níveis de tarefa
 
@@ -60,6 +82,7 @@ Agentes compartilham **referências**, não reproduções.
 - Resumir logs, não copiar inteiro
 - Não repetir contexto já registrado pelo outro agente
 - Não refazer investigação já concluída pelo outro
+- Preferir `/codex:status` a `/codex:result` quando só é preciso saber se o job terminou
 
 ## Formato de entrega do Codex
 
