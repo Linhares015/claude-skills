@@ -1,0 +1,21 @@
+{
+  "name": "claude-skills",
+  "owner": {
+    "name": "Linhares015"
+  },
+  "metadata": {
+    "description": "Skills pessoais — workflows e convenções de desenvolvimento.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "user-skills",
+      "description": "Skills pessoais: codex-mode workflow (Claude planeja, Codex executa).",
+      "version": "1.0.0",
+      "author": {
+        "name": "Linhares015"
+      },
+      "source": "./plugins/user-skills"
+    }
+  ]
+}
