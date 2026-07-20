@@ -1,7 +1,7 @@
 {
   "name": "user-skills",
-  "version": "1.0.0",
-  "description": "Skills pessoais: codex-mode workflow (Claude planeja, Codex executa).",
+  "version": "1.1.0",
+  "description": "Skills pessoais: multi-agent execution mode (Claude orquestra, Codex/Kimi/outros executam).",
   "author": {
     "name": "Linhares015"
   }

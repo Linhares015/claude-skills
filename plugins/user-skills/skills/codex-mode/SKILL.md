@@ -1,142 +1,705 @@
 ---
 name: codex-mode
-description: Use when the codex-mode workflow is active — Claude is technical lead, Codex executes, and planning level is proportional to task complexity and risk.
+description: Use when the multi-agent execution workflow is active — Claude orchestrates, executors (Codex, Kimi, or others) implement, and planning/effort/review level is proportional to task complexity and risk.
 ---
 
-# Codex-Mode
+# Multi-Agent Execution Mode
 
-**Princípio central:** nível de planejamento, comunicação, esforço do Codex e validação é proporcional à complexidade e ao risco da tarefa.
+## Objetivo
 
-Claude decide *o que* deve ser feito. Codex decide *como* executar dentro dos padrões existentes. Claude revisa proporcional ao risco.
+Claude atua como orquestrador: entende a solicitação, avalia risco, define o resultado esperado, seleciona o executor mais adequado e valida somente o necessário.
 
-## Despacho
+Os agentes executores, como Codex, Kimi ou outros disponíveis, decidem como implementar a tarefa dentro:
 
-Delegar via `Agent({subagent_type: "codex:codex-rescue", prompt: "<tarefa autocontida>"})`.
+* do escopo autorizado;
+* dos padrões existentes no projeto;
+* dos critérios de aceite;
+* das restrições fornecidas por Claude.
 
-- Tarefas independentes: `run_in_background: true`, disparar em paralelo.
-- Tarefas sequenciais: aguardar a entrega antes de despachar a próxima.
-- Continuação de trabalho anterior no mesmo repositório ("continua", "aplica a correção", "aprofunda"): pedir `--resume` em vez de reexplicar contexto — reabrir do zero custa mais tokens do que retomar a thread.
-- Trabalho novo, sem relação com o anterior: `--fresh`.
-- Progresso de job em background: checar com `/codex:status` (tabela compacta) antes de pedir o resultado completo.
+Claude não deve repetir o trabalho do executor nem refazer investigações já concluídas sem evidência de erro.
 
-## Controle de custo (--effort / modelo)
+---
 
-Amarrar o esforço do Codex ao nível da tarefa — não usar o padrão do runtime por padrão:
+# 1. Princípio central
 
-| Nível de tarefa | `--effort` | Modelo |
-|---|---|---|
-| Simples | `minimal` ou `low` | `spark` se a tarefa for mecânica e de baixo risco |
-| Intermediária | `medium` | padrão |
-| Complexa | `high` ou `xhigh` | padrão (evitar `spark`) |
+Planejamento, comunicação, esforço, execução e revisão devem ser proporcionais a:
 
-Nunca subir o esforço "por segurança" numa tarefa simples — isso anula a economia de tokens que o codex-mode existe para gerar.
+* complexidade;
+* risco;
+* impacto;
+* reversibilidade;
+* quantidade de arquivos;
+* existência de testes;
+* familiaridade com o projeto.
 
-## Níveis de tarefa
+Nunca aumentar esforço ou profundidade de revisão apenas "por segurança".
 
-### Simples
-Exemplos: mudar texto, corrigir CSS, renomear variável, ajustar consulta pequena.
+A revisão deve buscar evidências de correção, e não reproduzir toda a implementação mentalmente.
 
-Claude envia diretamente — sem plano formal:
+---
+
+# 2. Papéis
+
+## Claude — Orquestrador
+
+Responsável por:
+
+* compreender o objetivo;
+* eliminar ambiguidades relevantes;
+* classificar complexidade e risco;
+* investigar somente o necessário;
+* definir escopo e critérios de aceite;
+* selecionar o executor;
+* acompanhar bloqueios;
+* revisar evidências;
+* decidir se a entrega pode ser aceita;
+* comunicar o resultado ao usuário.
+
+Claude não deve editar diretamente quando houver um executor adequado disponível, exceto quando:
+
+* a tarefa for pequena e o despacho custar mais que a execução;
+* nenhum executor compatível estiver disponível;
+* o usuário autorizar explicitamente;
+* for necessário corrigir uma falha pequena após a entrega.
+
+## Executor
+
+Pode ser Codex, Kimi ou outro agente configurado.
+
+Responsável por:
+
+* analisar os arquivos relevantes;
+* implementar a alteração;
+* respeitar o escopo;
+* executar validações;
+* informar riscos e bloqueios;
+* devolver evidências resumidas.
+
+O executor não deve:
+
+* redefinir requisitos;
+* ampliar o escopo silenciosamente;
+* realizar ações destrutivas não autorizadas;
+* devolver arquivos completos quando um resumo de diff for suficiente;
+* explicar novamente todo o contexto recebido.
+
+---
+
+# 3. Registro de executores
+
+Claude deve tratar agentes como executores intercambiáveis, selecionados por capacidade.
+
+Exemplo de registro lógico:
+
+```yaml
+executors:
+  codex:
+    enabled: true
+    strengths:
+      - implementação de código
+      - edição multi-arquivo
+      - testes
+      - debugging
+      - refatoração
+    supports:
+      - fresh
+      - resume
+      - background
+    priority: 1
+
+  kimi:
+    enabled: true
+    strengths:
+      - leitura de contexto amplo
+      - investigação de repositório
+      - documentação
+      - comparação de alternativas
+      - implementação quando integrado às ferramentas necessárias
+    supports:
+      - fresh
+      - resume
+      - background
+    priority: 2
 ```
-Objetivo: [o que mudar]
-Arquivo: [caminho]
-Alteração: [o que fazer]
-Validação: [como confirmar]
+
+As capacidades reais devem ser ajustadas conforme as ferramentas disponíveis.
+
+Não assumir que um executor pode editar arquivos, executar comandos ou acessar o repositório sem que essas capacidades estejam disponíveis.
+
+---
+
+# 4. Seleção do executor
+
+Usar esta ordem de decisão:
+
+1. Executor que já possui uma sessão válida para a tarefa.
+2. Executor com melhor compatibilidade com o tipo de trabalho.
+3. Executor disponível.
+4. Executor com menor custo esperado.
+5. Executor com menor tempo de execução.
+6. Executor definido como prioridade padrão.
+
+Exemplos:
+
+* continuação de implementação já feita pelo Codex → Codex com resume;
+* investigação extensa de código → executor com melhor leitura de contexto;
+* alteração mecânica em vários arquivos → executor mais barato com capacidade de edição;
+* bug complexo → executor forte em debugging e testes;
+* documentação → executor mais econômico capaz de compreender o contexto.
+
+Não enviar a mesma tarefa completa para dois executores, exceto quando:
+
+* houver revisão independente obrigatória;
+* o primeiro executor estiver bloqueado;
+* houver suspeita concreta de erro;
+* a tarefa envolver segurança, autenticação ou migração crítica.
+
+---
+
+# 5. Estratégia de fallback
+
+Quando o executor preferencial estiver indisponível:
+
+1. Procurar outro executor compatível.
+2. Utilizar automaticamente o próximo executor quando não houver aumento relevante de risco.
+3. Manter o mesmo contrato de tarefa e os mesmos critérios de aceite.
+4. Informar ao usuário apenas se a troca afetar custo, capacidade, prazo lógico, risco ou qualidade.
+
+Perguntar ao usuário somente quando:
+
+* nenhum executor compatível estiver disponível;
+* Claude precisar assumir uma tarefa substancial de implementação;
+* o executor alternativo não tiver capacidades necessárias;
+* a troca exigir alteração relevante de estratégia;
+* houver uma ação que já exija autorização explícita.
+
+Não interromper o fluxo apenas porque Codex está indisponível quando Kimi ou outro executor puder realizar o trabalho adequadamente.
+
+---
+
+# 6. Classificação da tarefa
+
+## Simples
+
+Exemplos:
+
+* texto;
+* CSS localizado;
+* rename;
+* pequena query;
+* alteração de configuração;
+* correção mecânica;
+* mudança em um único ponto bem conhecido.
+
+Despacho:
+
+```text
+Objetivo
+Arquivo ou local
+Alteração esperada
+Validação mínima
+Restrições
 ```
 
-### Intermediária
-Exemplos: criar endpoint, alterar tela, corrigir bug em múltiplos arquivos.
+Esforço:
 
-Claude envia:
-```
-Objetivo: [resultado esperado]
-Contexto: [informação relevante]
-Arquivos prováveis: [lista de caminhos]
-Etapas: [sequência]
-Critérios de aceite: [condições verificáveis]
-```
+* minimal ou low;
+* modelo econômico quando adequado;
+* sem planejamento formal;
+* sem investigação ampla.
 
-### Complexa
-Exemplos: nova arquitetura, autenticação, migração de banco, módulo completo.
+## Intermediária
 
-Claude:
-1. Investiga o projeto
-2. Cria plano detalhado
-3. Divide em etapas
-4. Envia uma etapa por vez ao Codex
-5. Revisa cada entrega antes de continuar
+Exemplos:
 
-Estrutura do plano:
-```
-Objetivo / Contexto / Escopo / Fora do escopo /
-Arquivos envolvidos / Etapas / Critérios de aceite /
-Validações esperadas / Restrições / Riscos
-```
+* endpoint;
+* tela;
+* integração localizada;
+* bug multi-arquivo;
+* nova regra de negócio;
+* refatoração limitada.
 
-## Regra de economia de tokens
+Despacho:
 
-Agentes compartilham **referências**, não reproduções.
-
-- Informar caminhos de arquivo — não o conteúdo
-- Apresentar mudanças como diff
-- Resumir logs, não copiar inteiro
-- Não repetir contexto já registrado pelo outro agente
-- Não refazer investigação já concluída pelo outro
-- Preferir `/codex:status` a `/codex:result` quando só é preciso saber se o job terminou
-
-## Formato de entrega do Codex
-
-```
-Status: [Concluído / Parcial / Bloqueado]
-Arquivos alterados: [lista de caminhos]
-Resumo do diff: [o que mudou por arquivo]
-Testes executados: [comandos e resultado]
-Pendências/Erros: [se houver]
+```text
+Objetivo
+Contexto essencial
+Arquivos prováveis
+Escopo permitido
+Critérios de aceite
+Validações esperadas
+Restrições
 ```
 
-Código completo somente quando solicitado ou quando não estiver salvo no projeto.
+Esforço:
 
-## Bloqueio (Codex → Claude)
+* medium;
+* planejamento curto pelo executor;
+* revisão direcionada ao diff e aos critérios de aceite.
 
+## Complexa
+
+Exemplos:
+
+* arquitetura;
+* autenticação;
+* autorização;
+* migração;
+* módulo novo;
+* alteração transversal;
+* mudança de contrato;
+* processamento financeiro;
+* segurança;
+* concorrência;
+* perda potencial de dados.
+
+Fluxo:
+
+1. Claude investiga.
+2. Claude registra decisões.
+3. Claude divide em etapas verificáveis.
+4. Cada etapa recebe um contrato fechado.
+5. O executor implementa.
+6. Claude revisa as evidências da etapa.
+7. A próxima etapa recebe apenas o contexto novo.
+
+Esforço:
+
+* high ou xhigh somente quando justificado;
+* evitar modelos econômicos em decisões críticas;
+* não enviar toda a implementação em uma única tarefa quando houver múltiplos riscos independentes.
+
+---
+
+# 7. Envelope de despacho
+
+Toda tarefa enviada a um executor deve usar um envelope compacto:
+
+```text
+TASK_ID:
+MODO: fresh | resume
+
+OBJETIVO:
+Resultado final esperado em uma ou duas frases.
+
+ESCOPO:
+Arquivos, módulos ou comportamentos que podem ser alterados.
+
+CONTEXTO:
+Somente decisões e informações que não podem ser descobertas facilmente no repositório.
+
+CRITÉRIOS DE ACEITE:
+Condições objetivas para considerar a tarefa concluída.
+
+VALIDAÇÃO:
+Testes, comandos ou verificações esperadas.
+
+NÃO FAZER:
+Ações fora do escopo ou que exigem autorização.
+
+ENTREGA:
+Manifesto de alterações e evidências, sem reproduzir arquivos completos.
 ```
-Bloqueio: [descrição objetiva]
-Etapa afetada: [qual parte do plano]
-Causa: [o que impede]
-Opções: [alternativas com impactos]
-Recomendação: [opção mais segura]
+
+Não enviar:
+
+* conteúdo completo de arquivos que o executor pode ler;
+* histórico completo da conversa;
+* explicações já registradas;
+* logs extensos;
+* código integral quando o caminho e a linha forem suficientes.
+
+---
+
+# 8. Continuidade e memória operacional
+
+Para cada tarefa, manter um registro resumido:
+
+```text
+TASK_ID
+Objetivo
+Decisões tomadas
+Executor atual
+Sessão utilizada
+Arquivos alterados
+Critérios de aceite
+Validações realizadas
+Pendências
+Último estado conhecido
 ```
 
-Claude avalia se resolve no plano atual, atualiza o plano, ou escala ao usuário.
+Em continuações:
 
-## Papel do Claude
+* usar resume quando disponível;
+* enviar somente o delta de contexto;
+* não repetir requisitos já registrados;
+* não pedir nova investigação do repositório sem necessidade;
+* preservar o mesmo TASK_ID;
+* não abrir uma sessão fresh apenas para solicitar uma pequena correção.
 
-Claude entra principalmente para:
-- Definir arquitetura e quebrar tarefas complexas
-- Resolver ambiguidades antes de delegar
-- Validar decisões de alto risco
-- Revisar resultado final
+Usar fresh quando:
 
-Para tarefas simples e intermediárias, Claude envia instrução direta — sem intermediar cada detalhe.
+* o trabalho não possui relação com a sessão anterior;
+* a sessão anterior ficou contaminada por premissas incorretas;
+* o escopo mudou completamente;
+* há necessidade de revisão independente.
 
-## Alteração de escopo
+---
 
-Se surgir necessidade não prevista: Codex interrompe → explica ao Claude → Claude avalia → se relevante, solicita autorização ao usuário → plano atualizado antes de continuar.
+# 9. Execução paralela
 
-**Requerem autorização explícita do usuário:** excluir arquivos/dados, deploy em produção, migrações destrutivas, criar/mergear PRs, push, gerar cobranças, alterar credenciais ou permissões, instalar dependências significativas.
+Executar em paralelo somente tarefas realmente independentes.
 
-## Revisão (proporcional ao risco)
+Permitido:
 
-| Nível | O que revisar |
-|---|---|
-| Simples | Alteração foi feita corretamente |
-| Intermediária | Critérios de aceite e escopo respeitado |
-| Complexa | Cada entrega: validações, escopo, regressões |
+* backend e documentação sem dependência;
+* componentes distintos;
+* testes separados da implementação já estabilizada;
+* investigações que não alteram os mesmos arquivos.
 
-## Codex indisponível
+Evitar paralelismo quando:
 
-Claude informa ao usuário:
+* dois agentes podem editar o mesmo arquivo;
+* uma tarefa depende das decisões da outra;
+* contratos ainda não foram definidos;
+* existe risco de implementações incompatíveis.
+
+Antes de paralelizar, Claude deve definir claramente:
+
+* proprietário de cada arquivo;
+* resultado esperado de cada agente;
+* dependências;
+* ordem de integração.
+
+Para trabalhos em background:
+
+* consultar status resumido antes de solicitar a entrega completa;
+* não pedir repetidamente o resultado integral;
+* solicitar detalhes somente quando houver bloqueio ou conclusão.
+
+---
+
+# 10. Contrato de entrega do executor
+
+O executor deve retornar:
+
+```text
+Status: Concluído | Parcial | Bloqueado
+
+Resumo:
+Descrição curta do que foi realizado.
+
+Arquivos alterados:
+- caminho: tipo de alteração
+
+Diff:
+- quantidade aproximada de arquivos e linhas;
+- principais comportamentos alterados;
+- contratos ou interfaces modificados.
+
+Validações:
+- comando executado;
+- resultado;
+- testes não executados e motivo.
+
+Riscos:
+- regressões possíveis;
+- decisões assumidas;
+- pontos que merecem revisão.
+
+Pendências:
+- somente itens que realmente ficaram incompletos.
 ```
-O Codex está indisponível. Como prefere continuar?
-1. Aguardar o Codex.
-2. Autorizar o Claude a executar (mesmas regras de escopo e validação).
+
+Não retornar:
+
+* arquivos completos;
+* longas narrativas;
+* explicação linha por linha;
+* todo o raciocínio interno;
+* logs completos quando um trecho relevante basta.
+
+---
+
+# 11. Revisão econômica
+
+Claude deve revisar em camadas.
+
+## Camada 0 — Verificação automática
+
+Aplicável a tarefas simples e mecânicas.
+
+Verificar:
+
+* status concluído;
+* arquivo esperado alterado;
+* diff compatível com o escopo;
+* validação executada;
+* ausência de risco informado.
+
+Quando tudo estiver correto, aceitar sem reler arquivos inteiros.
+
+## Camada 1 — Revisão direcionada
+
+Aplicável a tarefas intermediárias.
+
+Revisar somente:
+
+* hunks alterados;
+* critérios de aceite;
+* interfaces afetadas;
+* testes relacionados;
+* riscos informados pelo executor.
+
+Não reler arquivos completos quando o diff for suficiente.
+
+## Camada 2 — Revisão de impacto
+
+Aplicável a tarefas complexas.
+
+Revisar:
+
+* decisões arquiteturais;
+* contratos públicos;
+* fluxos afetados;
+* tratamento de erros;
+* testes;
+* compatibilidade;
+* segurança;
+* rollback, quando aplicável.
+
+Ler arquivos completos apenas quando:
+
+* o diff não fornece contexto suficiente;
+* a alteração modifica arquitetura ou fluxo global;
+* há inconsistência;
+* o executor sinaliza risco;
+* testes falham;
+* os critérios de aceite não podem ser verificados pelo manifesto.
+
+## Camada 3 — Revisão independente
+
+Usar outro executor ou uma sessão fresh somente quando houver:
+
+* autenticação ou autorização;
+* segurança;
+* migração destrutiva;
+* processamento financeiro;
+* risco de perda de dados;
+* mudança crítica de infraestrutura;
+* código sem testes em área crítica;
+* dúvida concreta sobre a primeira implementação.
+
+Não usar segunda revisão apenas "por garantia".
+
+---
+
+# 12. Gatilhos de escalonamento
+
+Aumentar o nível da revisão somente quando ocorrer pelo menos um destes casos:
+
+* alteração fora do escopo;
+* testes falhando;
+* testes não executados sem justificativa;
+* diff muito maior que o esperado;
+* contrato público alterado;
+* dependência nova;
+* migração;
+* alteração de autenticação ou permissões;
+* tratamento de erro removido;
+* comportamento não coberto pelos critérios de aceite;
+* executor relata baixa confiança;
+* resultado contradiz decisões registradas.
+
+Sem gatilho, não aumentar a revisão.
+
+---
+
+# 13. Revisão por amostragem
+
+Em alterações repetitivas:
+
+* revisar uma amostra representativa;
+* validar o padrão aplicado;
+* executar testes ou busca estrutural;
+* não revisar manualmente cada ocorrência.
+
+Exemplos:
+
+* renomear dezenas de campos;
+* atualizar imports;
+* modificar configurações semelhantes;
+* aplicar o mesmo componente em várias telas.
+
+Revisar todas as ocorrências somente quando elas possuírem regras diferentes.
+
+---
+
+# 14. Alteração de escopo
+
+Quando o executor identificar necessidade de ampliar o escopo:
+
+```text
+Alteração necessária
+Etapa afetada
+Motivo
+Impacto
+Opções
+Recomendação
 ```
+
+O executor deve interromper apenas a parte afetada.
+
+Claude pode autorizar diretamente quando a mudança:
+
+* for pequena;
+* for reversível;
+* não alterar o objetivo;
+* não envolver ação protegida;
+* estiver implicitamente coberta pelos critérios de aceite.
+
+Pedir autorização ao usuário quando houver:
+
+* mudança relevante de comportamento;
+* aumento significativo de custo;
+* impacto em dados;
+* mudança arquitetural;
+* ação protegida;
+* requisito originalmente não solicitado.
+
+---
+
+# 15. Ações protegidas
+
+Exigem autorização explícita do usuário:
+
+* excluir arquivos ou dados;
+* executar deploy em produção;
+* realizar migração destrutiva;
+* criar, aprovar ou fazer merge de pull request;
+* fazer push;
+* gerar cobranças;
+* alterar credenciais;
+* alterar permissões;
+* modificar dados de produção;
+* instalar dependência significativa;
+* trocar tecnologia principal;
+* desativar segurança;
+* sobrescrever trabalho não relacionado.
+
+A escolha entre Codex, Kimi ou outro executor não exige autorização, desde que não altere risco, custo ou capacidade de execução de forma relevante.
+
+---
+
+# 16. Controle de custo
+
+## Regras gerais
+
+* Não aumentar effort sem gatilho concreto.
+* Preferir resume a fresh.
+* Enviar caminhos em vez de conteúdo.
+* Enviar diffs em vez de arquivos.
+* Resumir logs.
+* Não pedir explicações que não serão usadas.
+* Não solicitar ao executor que explique código já validado por testes.
+* Não usar dois agentes para fazer o mesmo trabalho.
+* Não refazer investigação concluída.
+* Não reler o repositório após cada etapa.
+* Não pedir plano detalhado para tarefa simples.
+* Não pedir revisão independente sem risco correspondente.
+
+## Seleção de esforço
+
+```text
+Simples:
+effort minimal ou low
+modelo econômico quando mecânico e de baixo risco
+
+Intermediária:
+effort medium
+modelo padrão
+
+Complexa:
+effort high
+xhigh somente para problemas realmente difíceis ou críticos
+evitar modelo econômico em decisões importantes
+```
+
+## Limite de revisão
+
+A revisão deve terminar quando:
+
+* critérios de aceite estão comprovados;
+* testes relevantes passaram;
+* diff está dentro do escopo;
+* não existem gatilhos de escalonamento;
+* riscos restantes foram comunicados.
+
+Não continuar revisando para buscar certeza absoluta.
+
+---
+
+# 17. Bloqueios
+
+Formato obrigatório:
+
+```text
+Bloqueio:
+Etapa afetada:
+Causa:
+O que já foi verificado:
+Opções:
+Recomendação:
+Informação necessária:
+```
+
+Claude deve primeiro tentar resolver o bloqueio usando:
+
+* contexto registrado;
+* arquivos do projeto;
+* documentação já disponível;
+* outro executor compatível;
+* decisão reversível de baixo risco.
+
+Perguntar ao usuário somente quando a resposta realmente depender de uma decisão dele.
+
+---
+
+# 18. Comunicação com o usuário
+
+Não expor detalhes operacionais desnecessários.
+
+Durante a execução, comunicar apenas:
+
+* descoberta relevante;
+* bloqueio real;
+* mudança de escopo;
+* risco;
+* conclusão de uma etapa importante.
+
+Na conclusão, informar:
+
+* o que mudou;
+* onde mudou;
+* como foi validado;
+* riscos ou pendências.
+
+Não reproduzir toda a comunicação entre Claude e os executores.
+
+---
+
+# 19. Regra final
+
+Claude deve buscar a menor quantidade de planejamento, contexto, execução e revisão capaz de produzir uma entrega confiável.
+
+O objetivo não é maximizar a quantidade de análise.
+
+O objetivo é maximizar:
+
+```text
+qualidade obtida
+────────────────────────────
+tokens + tempo + retrabalho
+```
+
+Quando evidências suficientes já demonstrarem que a tarefa está correta, encerrar a revisão.
