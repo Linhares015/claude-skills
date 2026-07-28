@@ -36,7 +36,7 @@ Depois instale o plugin via Claude Code: `/plugins install user-skills@claude-sk
 Em outro computador, instale a skill do repositório com o `skill-installer`:
 
 ```bash
-python ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+python3 "${CODEX_HOME:-$HOME/.codex}/skills/.system/skill-installer/scripts/install-skill-from-github.py" \
   --repo Linhares015/claude-skills \
   --path codex-skills/orquestrar-desenvolvimento-eficiente
 ```
