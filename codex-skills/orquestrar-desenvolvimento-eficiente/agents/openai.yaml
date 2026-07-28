@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orquestrar desenvolvimento eficiente"
+  short_description: "Planeje, delegue e valide com eficiência"
+  default_prompt: "Use $orquestrar-desenvolvimento-eficiente para planejar e coordenar esta tarefa de desenvolvimento."
