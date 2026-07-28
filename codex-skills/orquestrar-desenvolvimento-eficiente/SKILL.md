@@ -11,7 +11,7 @@ description: Orquestre tarefas de desenvolvimento com uso eficiente de modelos e
 - Use modelos econômicos em subagentes para tarefas claras, delimitadas e de baixo risco, como inventário, buscas, alterações mecânicas e testes.
 - Não fixe nomes de modelos: escolha conforme as opções disponíveis na plataforma.
 - Escalone uma subtarefa para um modelo mais capaz após duas falhas, diante de novo risco ou quando surgir ambiguidade relevante.
-- Informe o usuário se a plataforma não permitir selecionar o modelo por agente.
+- Se a plataforma não permitir selecionar o modelo por agente, informe a limitação, mantenha a divisão de responsabilidades usando o modelo disponível e aplique escalonamento de modelo somente quando a plataforma permitir.
 
 ## Delegação e conclusão
 
